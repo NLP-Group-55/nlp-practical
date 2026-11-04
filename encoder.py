@@ -9,9 +9,13 @@ class BagOfWords:
         """Number of features: one per vocabulary token."""
         return self.tokenizer.get_vocab_size()
 
-    def __call__(self, text: str) -> np.ndarray:
-        """Return a float32 vector containing BPE token counts."""
-        token_ids = self.tokenizer.encode(text).ids
-        vector = np.zeros(len(self), dtype=np.float32)
-        np.add.at(vector, token_ids, 1)
-        return vector
+    def __call__(self, texts: list[str]) -> np.ndarray:
+        """Return float32 counts with shape (batch_size, vocab_size)."""
+        encodings = self.tokenizer.encode_batch(texts)
+        vectors = np.zeros((len(texts), len(self)), dtype=np.float32)
+
+        for i, encoding in enumerate(encodings):
+            np.add.at(vectors[i], encoding.ids, 1)
+
+        return vectors
+    
