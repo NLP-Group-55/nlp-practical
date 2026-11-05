@@ -96,6 +96,26 @@ def train_model(model, loader, optimizer, criterion, device=DEVICE):
     return total_loss / len(loader.dataset)
 
 
+def fit_mlp(
+    train_loader,
+    input_dim,
+    *,
+    hidden_dim=HIDDEN_DIM,
+    epochs=EPOCHS,
+    learning_rate=LEARNING_RATE,
+    device=DEVICE,
+):
+    """Fit the MLP for a fixed number of epochs on the training fold."""
+    model = MLP(input_dim, hidden_dim, len(LABEL_IDS)).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss()
+    loss_history = [
+        train_model(model, train_loader, optimizer, criterion, device)
+        for _ in range(epochs)
+    ]
+    return model, loss_history
+
+
 @torch.no_grad()
 def evaluate_model(model, loader, device=DEVICE):
     model.eval()
@@ -184,20 +204,14 @@ def run_cross_validation(
             heldout_features, labels[heldout_indices], False, batch_size
         )
 
-        model = MLP(
+        model, loss_history = fit_mlp(
+            train_loader,
             input_dim=train_features.shape[1],
             hidden_dim=hidden_dim,
-            output_dim=len(LABEL_IDS),
-        ).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        criterion = nn.CrossEntropyLoss()
-
-        # A fixed epoch budget: held-out scoring data does not select epochs.
-        loss_history = []
-        for _ in range(epochs):
-            loss_history.append(
-                train_model(model, train_loader, optimizer, criterion, device)
-            )
+            epochs=epochs,
+            learning_rate=learning_rate,
+            device=device,
+        )
 
         scores = evaluate_model(model, heldout_loader, device)
         fold_results.append({
