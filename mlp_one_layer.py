@@ -27,7 +27,7 @@ from tokenizers import ByteLevelBPETokenizer
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from data_loader import load_stance, to_pairs
+from data_loader import load_stance_split
 from encoder import BagOfWords
 
 
@@ -114,6 +114,17 @@ def fit_mlp(
         for _ in range(epochs)
     ]
     return model, loss_history
+
+
+@torch.no_grad()
+def predict_mlp(model, features):
+    """Predict stance IDs from a matrix of encoded tweets."""
+    model.eval()
+    features = torch.as_tensor(features, dtype=torch.float32)
+    device = next(model.parameters()).device
+    predictions = [model(batch.to(device)).argmax(dim=1).cpu()
+                   for batch in features.split(BATCH_SIZE)]
+    return torch.cat(predictions).numpy()
 
 
 @torch.no_grad()
@@ -257,10 +268,7 @@ def run_cross_validation(
 
 
 def main():
-    dataset = load_stance(topics="feminist")
-    pairs = to_pairs(dataset, splits="train")
-    texts = [text for text, label in pairs]
-    labels = [label for text, label in pairs]
+    texts, labels = load_stance_split("feminist")
 
     # Agree with your team whether to use train or train + validation.
     # This example preserves the current train-only protocol.
