@@ -100,13 +100,14 @@ def fit_mlp(
     train_loader,
     input_dim,
     *,
+    n_classes=len(LABEL_IDS),
     hidden_dim=HIDDEN_DIM,
     epochs=EPOCHS,
     learning_rate=LEARNING_RATE,
     device=DEVICE,
 ):
     """Fit the MLP for a fixed number of epochs on the training fold."""
-    model = MLP(input_dim, hidden_dim, len(LABEL_IDS)).to(device)
+    model = MLP(input_dim, hidden_dim, n_classes).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.CrossEntropyLoss()
     loss_history = [

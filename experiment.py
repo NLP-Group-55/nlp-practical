@@ -1,6 +1,7 @@
-"""Cross-validate the stance classifiers with `uv run python experiment.py`."""
+"""Cross-validate the text classifiers with `uv run python experiment.py`."""
 
 import json
+from argparse import ArgumentParser
 from collections import defaultdict
 from functools import partial
 from itertools import combinations
@@ -8,12 +9,13 @@ from pathlib import Path
 
 import numpy as np
 from baycomp import two_on_single
+from scipy.sparse import csr_matrix
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedKFold
 from tokenizers import ByteLevelBPETokenizer
 
-from data_loader import load_stance_split
+from data_loader import LABEL_NAMES, load_goemotions_split, load_stance_split
 from encoder import BagOfWords, TfidfEncoder, TokenIndicators
 from mlp_one_layer import (
     LABEL_IDS,
@@ -43,9 +45,9 @@ def split_folds(texts, labels):
     return StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=SEED).split(texts, labels)
 
 
-def fit_fold(train_texts, train_labels, heldout_texts, *, seed):
+def fit_fold(train_texts, train_labels, heldout_texts, *, seed, n_classes=len(LABEL_IDS)):
     """Fit each representation and its classifiers on the training fold."""
-    # All systems share this vocabulary, learned only from training tweets.
+    # All systems share this vocabulary, learned only from the training fold.
     tokenizer = ByteLevelBPETokenizer()
     tokenizer.train_from_iterator(
         train_texts, vocab_size=VOCAB_SIZE, min_frequency=2, show_progress=False
@@ -58,11 +60,13 @@ def fit_fold(train_texts, train_labels, heldout_texts, *, seed):
         train_features = encoder(train_texts)
         heldout_features = encoder(heldout_texts)
 
-        logistic = LogisticRegression(max_iter=1_000).fit(train_features, train_labels)
-        svm = train_svm(train_features, train_labels, seed=seed)
+        # Text vectors are mostly zero. Keep the linear solvers' input sparse.
+        linear_features = csr_matrix(train_features)
+        logistic = LogisticRegression(max_iter=1_000).fit(linear_features, train_labels)
+        svm = train_svm(linear_features, train_labels, seed=seed)
         set_seed(seed)
         train_loader = make_loader(train_features, train_labels, shuffle=True)
-        mlp, _ = fit_mlp(train_loader, input_dim=train_features.shape[1])
+        mlp, _ = fit_mlp(train_loader, input_dim=train_features.shape[1], n_classes=n_classes)
         predictors = {
             "Logistic regression": logistic.predict,
             "Linear SVM": svm.predict,
@@ -71,42 +75,63 @@ def fit_fold(train_texts, train_labels, heldout_texts, *, seed):
         yield representation, train_features, heldout_features, predictors
 
 
-def run_cross_validation(texts, labels):
+def run_cross_validation(texts, labels, *, label_ids=LABEL_IDS):
     """Return paired fold scores for every encoder and classifier combination."""
     texts = np.asarray(texts, dtype=object)
     labels = np.asarray(labels, dtype=np.int64)
+    counts = np.bincount(labels, minlength=len(label_ids))
+    if np.any(counts < N_SPLITS):
+        raise ValueError(f"Every class needs at least {N_SPLITS} examples for stratified CV.")
     scores = defaultdict(list)
 
     for fold, (train_idx, heldout_idx) in enumerate(split_folds(texts, labels), 1):
+        print(f"Fold {fold}/{N_SPLITS} ({len(train_idx):,} training examples)", flush=True)
         train_texts, heldout_texts = texts[train_idx].tolist(), texts[heldout_idx].tolist()
         train_labels, heldout_labels = labels[train_idx], labels[heldout_idx]
         for representation, _, heldout_features, predictors in fit_fold(
-            train_texts, train_labels, heldout_texts, seed=SEED + fold
+            train_texts, train_labels, heldout_texts, seed=SEED + fold, n_classes=len(label_ids)
         ):
             for name, predict in predictors.items():
                 predictions = predict(heldout_features)
                 scores[representation, name].append({
                     "accuracy": accuracy_score(heldout_labels, predictions),
                     "macro_f1": f1_score(
-                        heldout_labels, predictions, labels=LABEL_IDS,
+                        heldout_labels, predictions, labels=label_ids,
                         average="macro", zero_division=0,
                     ),
                 })
+            print(f"  {representation} done", flush=True)
 
     return scores
 
 
 def main():
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", choices=("stance", "goemotions"), default="stance")
+    args = parser.parse_args()
+
     # Pool the development splits and reserve the official test split for later.
-    dataset_name = "TweetEval feminist stance (train + validation)"
-    texts, labels = load_stance_split(TOPIC, split=DATA_SPLIT)
-    scores = run_cross_validation(texts, labels)
+    if args.dataset == "goemotions":
+        dataset_name = "GoEmotions single-label (train + validation)"
+        texts, labels, label_names, original_size = load_goemotions_split(DATA_SPLIT)
+        results_path = RESULTS_PATH.parent / "goemotions" / RESULTS_PATH.name
+    else:
+        dataset_name = "TweetEval feminist stance (train + validation)"
+        texts, labels = load_stance_split(TOPIC, split=DATA_SPLIT)
+        label_names, original_size = LABEL_NAMES, len(texts)
+        results_path = RESULTS_PATH
+
+    label_ids = list(range(len(label_names)))
+    class_counts = dict(zip(label_names, np.bincount(labels, minlength=len(label_ids)).tolist()))
+    print(f"{dataset_name} | {len(texts):,} of {original_size:,} examples | {N_SPLITS} folds", flush=True)
+    print(f"Class counts: {class_counts}", flush=True)
+    scores = run_cross_validation(texts, labels, label_ids=label_ids)
     macro_f1 = {
         system: np.array([fold["macro_f1"] for fold in folds])
         for system, folds in scores.items()
     }
 
-    print(f"{dataset_name} | {len(texts)} tweets | {N_SPLITS} folds")
+    print(f"\n{dataset_name} | {len(texts):,} examples | {N_SPLITS} folds")
     for system in sorted(scores, key=lambda system: macro_f1[system].mean(), reverse=True):
         accuracy = np.mean([fold["accuracy"] for fold in scores[system]])
         print(f"{' + '.join(system)} | macro-F1 {macro_f1[system].mean():.3f} | accuracy {accuracy:.3f}")
@@ -130,14 +155,16 @@ def main():
     results = {
         "dataset": dataset_name,
         "n_examples": len(texts),
+        "n_examples_before_filter": original_size,
+        "class_counts": class_counts,
         "n_splits": N_SPLITS,
         "rope": ROPE,
         "systems": [{"name": system, "folds": folds} for system, folds in scores.items()],
         "comparisons": comparisons,
     }
-    RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    RESULTS_PATH.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
-    print(f"\nSaved results to {RESULTS_PATH}")
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results_path.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    print(f"\nSaved results to {results_path}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Load texts and labels from TweetEval stance."""
+"""Load single-label texts for the experiments."""
 
 import re
 from collections import Counter
@@ -6,6 +6,7 @@ from collections import Counter
 from datasets import load_dataset
 
 DATASET_ID = "cardiffnlp/tweet_eval"
+GOEMOTIONS_ID = "google-research-datasets/go_emotions"
 LABEL_NAMES = ("none", "against", "favor")
 _SEMST = re.compile(r"\s*#SemST\b", flags=re.IGNORECASE)
 
@@ -21,6 +22,15 @@ def load_stance_split(topic, split="train", *, strip_semst=True, cache_dir=None)
     if strip_semst:
         texts = [_SEMST.sub("", text) for text in texts]
     return [text.strip() for text in texts], list(data["label"])
+
+
+def load_goemotions_split(split="train+validation"):
+    """Keep simplified GoEmotions comments that have exactly one gold label."""
+    data = load_dataset(GOEMOTIONS_ID, "simplified", split=split)
+    pairs = [(row["text"], row["labels"][0]) for row in data if len(row["labels"]) == 1]
+    texts, labels = zip(*pairs)
+    label_names = tuple(data.features["labels"].feature.names)
+    return list(texts), list(labels), label_names, len(data)
 
 
 if __name__ == "__main__":

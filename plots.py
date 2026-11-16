@@ -13,7 +13,7 @@ from matplotlib.ticker import PercentFormatter
 RESULTS_DIR = Path(__file__).with_name("results") / "validation"
 
 
-def plot_scores(results):
+def plot_scores(results, output_dir=RESULTS_DIR):
     systems = sorted(
         results["systems"],
         key=lambda system: np.mean([fold["macro_f1"] for fold in system["folds"]]),
@@ -25,7 +25,7 @@ def plot_scores(results):
     fig, axes = plt.subplots(
         1, 2, sharey=True, figsize=(10, 1.8 + 0.4 * len(systems)), layout="constrained"
     )
-    fig.suptitle("Stance classification performance", fontsize=17, fontweight="bold")
+    fig.suptitle("Cross-validation performance", fontsize=17, fontweight="bold")
     for ax, metric, title, color in zip(
         axes, ("macro_f1", "accuracy"), ("Macro-F1", "Accuracy"), ("#117C83", "#6850A1")
     ):
@@ -43,15 +43,15 @@ def plot_scores(results):
     axes[0].set_yticks(rows, names)
     axes[0].invert_yaxis()
     fig.supxlabel(
-        f"{results['dataset']} · {results['n_examples']} tweets · "
+        f"{results['dataset']} · {results['n_examples']:,} examples · "
         f"{results['n_splits']} folds per system · Diamonds show means",
         fontsize=9,
     )
-    fig.savefig(RESULTS_DIR / "scores.png", dpi=180)
+    fig.savefig(output_dir / "scores.png", dpi=180)
     plt.close(fig)
 
 
-def plot_rope(results):
+def plot_rope(results, output_dir=RESULTS_DIR):
     fig, axes = plt.subplots(1, 2, sharex=True, figsize=(14, 6.5), layout="constrained")
     fig.suptitle(
         f"Bayesian ROPE comparisons\nPractical equivalence is within ±{results['rope']:.2f} macro-F1",
@@ -102,7 +102,7 @@ def plot_rope(results):
 
     handles, labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="outside lower center", ncol=3, frameon=False)
-    fig.savefig(RESULTS_DIR / "rope.png", dpi=180)
+    fig.savefig(output_dir / "rope.png", dpi=180)
     plt.close(fig)
 
 
@@ -166,19 +166,24 @@ def plot_boundaries():
 
 def main():
     parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", choices=("stance", "goemotions"), default="stance")
     parser.add_argument("--boundaries", action="store_true", help="Fit the first fold and plot its decision regions.")
-    if parser.parse_args().boundaries:
+    args = parser.parse_args()
+    if args.boundaries:
+        if args.dataset != "stance":
+            parser.error("--boundaries currently supports the stance dataset only")
         plot_boundaries()
         return
 
-    path = RESULTS_DIR / "results.json"
+    output_dir = RESULTS_DIR / "goemotions" if args.dataset == "goemotions" else RESULTS_DIR
+    path = output_dir / "results.json"
     if not path.is_file():
-        raise SystemExit("Run `uv run python experiment.py` to generate the results first.")
+        raise SystemExit(f"Run `uv run python experiment.py --dataset {args.dataset}` first.")
     results = json.loads(path.read_text(encoding="utf-8"))
     with plt.style.context("seaborn-v0_8-white"):
-        plot_scores(results)
-        plot_rope(results)
-    print(f"Saved scores.png and rope.png to {RESULTS_DIR}")
+        plot_scores(results, output_dir)
+        plot_rope(results, output_dir)
+    print(f"Saved scores.png and rope.png to {output_dir}")
 
 
 if __name__ == "__main__":
