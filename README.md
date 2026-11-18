@@ -1,6 +1,12 @@
 # nlp-practical
 
-NLP1 practicals: Stance Detection on the stance subsets of [TweetEval](https://huggingface.co/datasets/cardiffnlp/tweet_eval).
+NLP1 practicals for Group 55. Both projects share the dataset loaders in
+`data_loader.py`.
+
+## Project 1
+
+The [Project 1 code](part1/) compares classic text classifiers. The initial
+experiment used the feminist stance subset of [TweetEval](https://huggingface.co/datasets/cardiffnlp/tweet_eval).
 
 The [GoEmotions](https://huggingface.co/datasets/google-research-datasets/go_emotions)
 experiment uses the `simplified` configuration and keeps comments with exactly
@@ -26,3 +32,9 @@ uv run python plots.py --dataset sst2
 ```
 
 Results and the score chart are written to `results/validation/sst2/official/`.
+
+## Project 2
+
+Project 2 uses pretrained embeddings on SST-2. The report covers vocabulary
+coverage, word similarities, encoder comparisons, and the final paired
+seed results. [Results](part2/RESULTS.md) · [Reproduction commands](part2/README.md)

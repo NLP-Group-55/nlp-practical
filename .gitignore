@@ -219,5 +219,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Generated validation results and figures
+# Generated results and downloaded embeddings
 /results/validation/
+/results/part2/
