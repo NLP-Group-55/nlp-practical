@@ -1,4 +1,4 @@
-"""Cross-validate the text classifiers with `uv run python experiment.py`."""
+"""Evaluate the text classifiers with `uv run python experiment.py`."""
 
 import json
 from argparse import ArgumentParser
@@ -15,7 +15,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedKFold
 from tokenizers import ByteLevelBPETokenizer
 
-from data_loader import LABEL_NAMES, load_goemotions_split, load_stance_split
+from data_loader import DATASET_CHOICES, LABEL_NAMES, load_goemotions_split, load_sst2_split, load_stance_split
 from encoder import BagOfWords, TfidfEncoder, TokenIndicators
 from mlp_one_layer import (
     LABEL_IDS,
@@ -46,8 +46,8 @@ def split_folds(texts, labels):
 
 
 def fit_fold(train_texts, train_labels, heldout_texts, *, seed, n_classes=len(LABEL_IDS)):
-    """Fit each representation and its classifiers on the training fold."""
-    # All systems share this vocabulary, learned only from the training fold.
+    """Fit each representation and its classifiers on the training examples."""
+    # All systems share this vocabulary, learned only from the training examples.
     tokenizer = ByteLevelBPETokenizer()
     tokenizer.train_from_iterator(
         train_texts, vocab_size=VOCAB_SIZE, min_frequency=2, show_progress=False
@@ -75,6 +75,24 @@ def fit_fold(train_texts, train_labels, heldout_texts, *, seed, n_classes=len(LA
         yield representation, train_features, heldout_features, predictors
 
 
+def score_split(train_texts, train_labels, heldout_texts, heldout_labels, *, seed, label_ids):
+    scores = {}
+    for representation, _, heldout_features, predictors in fit_fold(
+        train_texts, train_labels, heldout_texts, seed=seed, n_classes=len(label_ids)
+    ):
+        for name, predict in predictors.items():
+            predictions = predict(heldout_features)
+            scores[representation, name] = {
+                "accuracy": accuracy_score(heldout_labels, predictions),
+                "macro_f1": f1_score(
+                    heldout_labels, predictions, labels=label_ids,
+                    average="macro", zero_division=0,
+                ),
+            }
+        print(f"  {representation} done", flush=True)
+    return scores
+
+
 def run_cross_validation(texts, labels, *, label_ids=LABEL_IDS):
     """Return paired fold scores for every encoder and classifier combination."""
     texts = np.asarray(texts, dtype=object)
@@ -88,38 +106,67 @@ def run_cross_validation(texts, labels, *, label_ids=LABEL_IDS):
         print(f"Fold {fold}/{N_SPLITS} ({len(train_idx):,} training examples)", flush=True)
         train_texts, heldout_texts = texts[train_idx].tolist(), texts[heldout_idx].tolist()
         train_labels, heldout_labels = labels[train_idx], labels[heldout_idx]
-        for representation, _, heldout_features, predictors in fit_fold(
-            train_texts, train_labels, heldout_texts, seed=SEED + fold, n_classes=len(label_ids)
-        ):
-            for name, predict in predictors.items():
-                predictions = predict(heldout_features)
-                scores[representation, name].append({
-                    "accuracy": accuracy_score(heldout_labels, predictions),
-                    "macro_f1": f1_score(
-                        heldout_labels, predictions, labels=label_ids,
-                        average="macro", zero_division=0,
-                    ),
-                })
-            print(f"  {representation} done", flush=True)
+        fold_scores = score_split(
+            train_texts, train_labels, heldout_texts, heldout_labels, seed=SEED + fold, label_ids=label_ids
+        )
+        for system, metrics in fold_scores.items():
+            scores[system].append(metrics)
 
     return scores
 
 
+def run_sst2_validation():
+    train_texts, train_labels, label_names, n_train = load_sst2_split("train")
+    val_texts, val_labels, val_label_names, n_val = load_sst2_split("validation")
+    if label_names != val_label_names:
+        raise ValueError("SST-2 train and validation label names must match.")
+
+    print(f"SST-2 official split | {n_train:,} train | {n_val:,} validation", flush=True)
+    scores = score_split(
+        train_texts, train_labels, val_texts, val_labels,
+        seed=SEED + 1, label_ids=list(range(len(label_names))),
+    )
+    systems = []
+    for system, metrics in sorted(scores.items(), key=lambda item: item[1]["macro_f1"], reverse=True):
+        print(f"{' + '.join(system)} | macro-F1 {metrics['macro_f1']:.3f} | accuracy {metrics['accuracy']:.3f}")
+        systems.append({"name": system, "metrics": metrics})
+
+    results = {
+        "dataset": "SST-2 sentiment",
+        "evaluation": "official_validation",
+        "train_split": "train",
+        "evaluation_split": "validation",
+        "n_train": n_train,
+        "n_examples": n_val,
+        "systems": systems,
+    }
+    results_path = RESULTS_PATH.parent / "sst2" / "official" / RESULTS_PATH.name
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results_path.write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    print(f"\nSaved results to {results_path}")
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=("stance", "goemotions"), default="stance")
+    parser.add_argument("--dataset", choices=DATASET_CHOICES, default="stance")
     args = parser.parse_args()
+    if args.dataset == "sst2":
+        run_sst2_validation()
+        return
 
-    # Pool the development splits and reserve the official test split for later.
+    # Pool the labeled development splits for cross-validation.
     if args.dataset == "goemotions":
         dataset_name = "GoEmotions single-label (train + validation)"
         texts, labels, label_names, original_size = load_goemotions_split(DATA_SPLIT)
-        results_path = RESULTS_PATH.parent / "goemotions" / RESULTS_PATH.name
     else:
         dataset_name = "TweetEval feminist stance (train + validation)"
         texts, labels = load_stance_split(TOPIC, split=DATA_SPLIT)
         label_names, original_size = LABEL_NAMES, len(texts)
-        results_path = RESULTS_PATH
+
+    results_path = (
+        RESULTS_PATH if args.dataset == "stance"
+        else RESULTS_PATH.parent / args.dataset / RESULTS_PATH.name
+    )
 
     label_ids = list(range(len(label_names)))
     class_counts = dict(zip(label_names, np.bincount(labels, minlength=len(label_ids)).tolist()))

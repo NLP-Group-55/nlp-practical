@@ -9,14 +9,17 @@ import numpy as np
 from matplotlib.colors import ListedColormap
 from matplotlib.ticker import PercentFormatter
 
+from data_loader import DATASET_CHOICES
 
 RESULTS_DIR = Path(__file__).with_name("results") / "validation"
 
 
 def plot_scores(results, output_dir=RESULTS_DIR):
+    official = results.get("evaluation") == "official_validation"
     systems = sorted(
         results["systems"],
-        key=lambda system: np.mean([fold["macro_f1"] for fold in system["folds"]]),
+        key=lambda system: system["metrics"]["macro_f1"] if official
+        else np.mean([fold["macro_f1"] for fold in system["folds"]]),
         reverse=True,
     )
     names = [" + ".join(system["name"]) for system in systems]
@@ -25,15 +28,20 @@ def plot_scores(results, output_dir=RESULTS_DIR):
     fig, axes = plt.subplots(
         1, 2, sharey=True, figsize=(10, 1.8 + 0.4 * len(systems)), layout="constrained"
     )
-    fig.suptitle("Cross-validation performance", fontsize=17, fontweight="bold")
+    title = "Official validation performance" if official else "Cross-validation performance"
+    fig.suptitle(title, fontsize=17, fontweight="bold")
     for ax, metric, title, color in zip(
         axes, ("macro_f1", "accuracy"), ("Macro-F1", "Accuracy"), ("#117C83", "#6850A1")
     ):
-        values = np.array([[fold[metric] for fold in system["folds"]] for system in systems])
-        means = values.mean(axis=1)
-        # Show the folds so a high average can be read alongside its spread.
-        ax.scatter(values.ravel(), np.repeat(rows, values.shape[1]), s=24, color=color, alpha=0.38)
-        ax.scatter(means, rows, s=56, marker="D", color=color, edgecolor="white", linewidth=0.8)
+        if official:
+            values = np.array([system["metrics"][metric] for system in systems])
+            summary = values
+        else:
+            values = np.array([[fold[metric] for fold in system["folds"]] for system in systems])
+            summary = values.mean(axis=1)
+            # Show the folds so a high average can be read alongside its spread.
+            ax.scatter(values.ravel(), np.repeat(rows, values.shape[1]), s=24, color=color, alpha=0.38)
+        ax.scatter(summary, rows, s=56, marker="D", color=color, edgecolor="white", linewidth=0.8)
         ax.set_title(title, loc="left", color=color, fontweight="bold")
         ax.set_xlim(max(0, values.min() - 0.03), min(1, values.max() + 0.03))
         ax.xaxis.set_major_formatter(PercentFormatter(1, decimals=0))
@@ -42,11 +50,12 @@ def plot_scores(results, output_dir=RESULTS_DIR):
         ax.tick_params(axis="both", length=0)
     axes[0].set_yticks(rows, names)
     axes[0].invert_yaxis()
-    fig.supxlabel(
-        f"{results['dataset']} · {results['n_examples']:,} examples · "
-        f"{results['n_splits']} folds per system · Diamonds show means",
-        fontsize=9,
-    )
+    subtitle = f"{results['dataset']} · {results['n_examples']:,} examples"
+    if official:
+        subtitle += f" in validation · Trained on {results['n_train']:,} official training examples"
+    else:
+        subtitle += f" · {results['n_splits']} folds per system · Diamonds show means"
+    fig.supxlabel(subtitle, fontsize=9)
     fig.savefig(output_dir / "scores.png", dpi=180)
     plt.close(fig)
 
@@ -166,7 +175,7 @@ def plot_boundaries():
 
 def main():
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", choices=("stance", "goemotions"), default="stance")
+    parser.add_argument("--dataset", choices=DATASET_CHOICES, default="stance")
     parser.add_argument("--boundaries", action="store_true", help="Fit the first fold and plot its decision regions.")
     args = parser.parse_args()
     if args.boundaries:
@@ -175,15 +184,18 @@ def main():
         plot_boundaries()
         return
 
-    output_dir = RESULTS_DIR / "goemotions" if args.dataset == "goemotions" else RESULTS_DIR
+    output_dir = RESULTS_DIR if args.dataset == "stance" else RESULTS_DIR / args.dataset
+    if args.dataset == "sst2":
+        output_dir /= "official"
     path = output_dir / "results.json"
     if not path.is_file():
         raise SystemExit(f"Run `uv run python experiment.py --dataset {args.dataset}` first.")
     results = json.loads(path.read_text(encoding="utf-8"))
     with plt.style.context("seaborn-v0_8-white"):
         plot_scores(results, output_dir)
-        plot_rope(results, output_dir)
-    print(f"Saved scores.png and rope.png to {output_dir}")
+        if results.get("comparisons"):
+            plot_rope(results, output_dir)
+    print(f"Saved figures to {output_dir}")
 
 
 if __name__ == "__main__":

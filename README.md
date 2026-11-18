@@ -14,3 +14,15 @@ uv run python plots.py --dataset goemotions
 ```
 
 Results and figures are written to `results/validation/goemotions/`.
+
+[SST-2](https://huggingface.co/datasets/stanfordnlp/sst2) is the group's selected
+dataset. The experiment fits the same nine setups on the official training split
+and reports macro-F1 and accuracy on the official validation split. Its single
+holdout provides one score per setup.
+
+```sh
+uv run python experiment.py --dataset sst2
+uv run python plots.py --dataset sst2
+```
+
+Results and the score chart are written to `results/validation/sst2/official/`.
